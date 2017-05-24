@@ -1,6 +1,8 @@
 // Package sinkdb provides a strongly consistent key-value store.
 package sinkdb
 
+//go:generate protoc --go_out=. types.proto
+
 import (
 	"context"
 	"errors"

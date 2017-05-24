@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package sinkdb;
+
+message Bytes {
+    bytes value = 1;
+}

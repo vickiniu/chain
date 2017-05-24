@@ -201,6 +201,12 @@ func main() {
 		chainlog.Fatalkv(ctx, chainlog.KeyError, err)
 	}
 
+	// Check that Postgres and sinkdb agree on the state of the cluster.
+	err = core.VerifyClusterID(ctx, sdb, db)
+	if err != nil {
+		chainlog.Fatalkv(ctx, chainlog.KeyError, err)
+	}
+
 	accessTokens := &accesstoken.CredentialStore{DB: db}
 
 	// We add handlers to our serve mux in two phases. In the first phase, we start

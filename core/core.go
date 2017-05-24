@@ -1,7 +1,10 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"database/sql"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,9 +14,12 @@ import (
 	"chain/core/config"
 	"chain/core/fetch"
 	"chain/core/leader"
+	"chain/database/pg"
+	"chain/database/sinkdb"
 	"chain/errors"
 	"chain/log"
 	"chain/net/http/httpjson"
+	"chain/net/raft"
 	"chain/protocol/bc"
 )
 
@@ -28,6 +34,7 @@ var (
 
 const (
 	crosscoreRPCVersion = 3
+	clusterIDKey        = `/core/cluster_id`
 )
 
 func (a *API) reset(ctx context.Context, req struct {
@@ -160,12 +167,16 @@ func (a *API) initCluster(ctx context.Context) error {
 		return err
 	}
 
-	// TODO(jackson): make adding this process's address
-	// atomic with initializing the cluster
-
 	// add this process's address as an allowed member
 	err = a.addAllowedMember(ctx, struct{ Addr string }{a.addr})
-	return err
+	if err != nil {
+		return err
+	}
+
+	// TODO(jackson): make adding this process's address and
+	// setting the cluster ID atomic with initializing the cluster
+
+	return setClusterID(ctx, a.sdb, a.db)
 }
 
 func (a *API) joinCluster(ctx context.Context, x struct {
@@ -183,6 +194,62 @@ func (a *API) joinCluster(ctx context.Context, x struct {
 
 	bootURL := fmt.Sprintf("https://%s", x.BootAddress)
 	return a.sdb.RaftService().Join(bootURL)
+}
+
+// setClusterID sets the Core's cluster ID in both sinkdb and Postgres.
+func setClusterID(ctx context.Context, sdb *sinkdb.DB, db pg.DB) error {
+	var clusterID [8]byte
+	_, err := rand.Read(clusterID[:])
+	if err != nil {
+		return err
+	}
+
+	err = sdb.Exec(ctx,
+		sinkdb.IfNotExists(clusterIDKey),
+		sinkdb.Set(clusterIDKey, &sinkdb.Bytes{Value: clusterID[:]}),
+	)
+	if err != nil {
+		return err
+	}
+
+	const q = `INSERT INTO cluster (id) VALUES($1)`
+	_, err = db.ExecContext(ctx, q, clusterID[:])
+	return err
+}
+
+// VerifyClusterID guards against the scenario where the Postgres
+// database is reset without resetting sinkdb.
+// https://github.com/chain/chain/issues/1167
+func VerifyClusterID(ctx context.Context, sdb *sinkdb.DB, db pg.DB) error {
+	// Lookup the existing cluster IDs, if any.
+	var sdbClusterID sinkdb.Bytes
+	sinkdbFound, err := sdb.Get(ctx, clusterIDKey, &sdbClusterID)
+	if err != nil && errors.Root(err) != raft.ErrUninitialized {
+		return err
+	} else if errors.Root(err) == raft.ErrUninitialized {
+		return nil
+	}
+
+	var pgClusterID []byte
+	err = db.QueryRowContext(ctx, `SELECT id FROM cluster`).Scan(&pgClusterID)
+	if err != nil && errors.Root(err) != sql.ErrNoRows {
+		return err
+	}
+
+	if errors.Root(err) == sql.ErrNoRows && !sinkdbFound {
+		// This is an initialized cored process but there's no cluster ID
+		// in Postgres or in sinkdb. It's likely a pre-1.3 Core or a Developer
+		// Edition core that was auto-initialized with the `init_cluster` build
+		// flag. We need to set the cluster ID for the first time.
+		return setClusterID(ctx, sdb, db)
+	}
+	if bytes.Equal(pgClusterID, sdbClusterID.Value) {
+		return nil
+	}
+	return fmt.Errorf("corrupted datastores: mismatched cluster IDs: %x and %x",
+		pgClusterID,
+		sdbClusterID.Value,
+	)
 }
 
 func closeConnOK(w http.ResponseWriter, req *http.Request) {

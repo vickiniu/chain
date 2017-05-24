@@ -21,7 +21,7 @@ import (
 
 var (
 	persistBlockchainReset = []string{"mockhsm", "access_tokens"}
-	neverReset             = []string{"migrations"}
+	neverReset             = []string{"migrations", "cluster"}
 )
 
 // ResetBlockchain deletes all blockchain data, resulting in an

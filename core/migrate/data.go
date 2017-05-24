@@ -72,4 +72,11 @@ var migrations = []migration{
 		DROP INDEX signers_type_id_idx;
 		DROP INDEX assets_sort_id;
 	`},
+	{Name: `2017-05-23.0.core.cluster.sql`, SQL: `
+		CREATE TABLE cluster (
+			id        bytea   NOT NULL,
+			singleton boolean NOT NULL DEFAULT true,
+			CHECK(singleton)
+		);
+	`},
 }

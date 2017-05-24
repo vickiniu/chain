@@ -321,6 +321,14 @@ CREATE SEQUENCE chain_id_seq
 
 
 
+CREATE TABLE cluster (
+    id bytea NOT NULL,
+    singleton boolean DEFAULT true NOT NULL,
+    CONSTRAINT cluster_singleton_check CHECK (singleton)
+);
+
+
+
 CREATE TABLE config (
     singleton boolean DEFAULT true NOT NULL,
     is_signer boolean,
@@ -654,3 +662,4 @@ insert into migrations (filename, hash) values ('2017-04-13.0.query.block-transa
 insert into migrations (filename, hash) values ('2017-04-17.0.core.null-token-type.sql', '185942cec464c12a2573f19ae386153389328f8e282af071024706e105e37eeb');
 insert into migrations (filename, hash) values ('2017-04-27.0.generator.pending-block-height.sql', 'bfe4fe5eec143e4367a91fd952cb5e3879f1c311f649ec13bfe95b202e94d4ec');
 insert into migrations (filename, hash) values ('2017-05-08.0.core.drop-redundant-indexes.sql', '5140e53b287b058c57ddf361d61cff3d3d1cbc3259a9de413b11574a71d09bec');
+insert into migrations (filename, hash) values ('2017-05-23.0.core.cluster.sql', '09c1e108e8992b37746b366dc834b7d055050c613f5ef9ea61959c7aca9ddbb5');
