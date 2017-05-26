@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"time"
 
-	"chain/core/accesstoken"
 	"chain/core/rpc"
 	"chain/core/txdb"
 	"chain/crypto/ed25519"
@@ -294,43 +293,32 @@ func tryGenerator(ctx context.Context, url, accessToken, blockchainID string, ht
 
 // TODO(tessr): make all of this atomic in raft, so we don't get halfway through
 // a postgres->raft migration and fail, losing the second half of the migration
-func migrateAccessTokens(ctx context.Context, db pg.DB, sdb *sinkdb.DB) error {
+func migrateAccessTokens(ctx context.Context, db pg.DB, sdb *sinkdb.DB) (op sinkdb.Op) {
 	store := authz.NewStore(sdb, GrantPrefix)
-	const q = `SELECT id, type, created FROM access_tokens`
-	var tokens []*accesstoken.Token
+	const q = `
+		SELECT id, type, created FROM access_tokens
+		WHERE type IN ('client', 'network')
+		ORDER BY type
+	`
+	grants := make(map[string][]*authz.Grant)
 	err := pg.ForQueryRows(ctx, db, q, func(id string, maybeType sql.NullString, created time.Time) {
-		t := &accesstoken.Token{
-			ID:      id,
-			Created: created,
-			Type:    maybeType.String,
+		guardData, _ := json.Marshal(map[string]string{"id": id})
+		policy := map[string]string{
+			"client":  "client-readwrite",
+			"network": "crosscore",
+		}[maybeType.String]
+		if policy == "" {
+			return
 		}
-		tokens = append(tokens, t)
-	})
-
-	for _, token := range tokens {
-		data := map[string]interface{}{
-			"id": token.ID,
-		}
-		guardData, err := json.Marshal(data)
-		if err != nil {
-			panic(err) // should never get here
-		}
-
-		grant := authz.Grant{
+		grants[policy] = append(grants[policy], &authz.Grant{
+			Policy:    policy,
 			GuardType: "access_token",
 			GuardData: guardData,
-			CreatedAt: token.Created.Format(time.RFC3339),
-		}
-		switch token.Type {
-		case "client":
-			grant.Policy = "client-readwrite"
-		case "network":
-			grant.Policy = "crosscore"
-		}
-		err = sdb.Exec(ctx, store.Save(ctx, &grant))
-		if err != nil {
-			return errors.Wrap(err)
-		}
-	}
-	return err
+			CreatedAt: created.Format(time.RFC3339),
+		})
+	})
+
+	op = sinkdb.All(op, store.Save(ctx, grants["client-readwrite"]...))
+	op = sinkdb.All(op, store.Save(ctx, grants["crosscore"]...))
+	return op
 }
