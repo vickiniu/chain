@@ -16,6 +16,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -49,12 +50,16 @@ func main() {
 	// Generate guides and reference docs
 	mustRunIn(path.Join(srcdir, "docs"), "md2html", "build", outdir)
 
-	// Generate SDK-specific documentation
 	wg := new(sync.WaitGroup)
 	for _, v := range versionPaths(srcdir) {
-		wg.Add(1)
-		go makeSdkDocs(wg, v, srcdir, outdir)
+		makeIndexInputFiles(wg, v, srcdir)
 	}
+
+	// Generate SDK-specific documentation
+	// for _, v := range versionPaths(srcdir) {
+	// 	wg.Add(1)
+	// 	go makeSdkDocs(wg, v, srcdir, outdir)
+	// }
 	wg.Wait()
 }
 
@@ -136,6 +141,16 @@ func makeTempRepo(srcdir string) string {
 	return d
 }
 
+func makeIndexInputFiles(wg *sync.WaitGroup, version, srcdir string) {
+	defer wg.Done()
+
+	wg.Add(1)
+	versionPath := path.Join(srcdir, "docs", version)
+	srcPath := path.Join(srcdir, "docs")
+	fmt.Println("path:", versionPath)
+	mustListContents(versionPath, srcPath, version)
+}
+
 func mustRun(command string, args ...string) {
 	c := exec.Command(command, args...)
 	c.Stderr = os.Stderr
@@ -172,4 +187,49 @@ func versionPaths(srcdir string) []string {
 	}
 
 	return paths
+}
+
+func mustListContents(parentPath string, srcPath string, version string) []string {
+
+	type Index struct {
+	    Title string
+			Body string
+			Version string
+	}
+
+	files, err := ioutil.ReadDir(parentPath)
+	if err != nil {
+		log.Fatalln("ReadDir error:", err)
+	}
+
+	var res []string
+	for _, f := range files {
+		n := f.Name()
+
+		if strings.HasPrefix(n, ".") {
+			continue
+		}
+
+		if f.IsDir() {
+			mustListContents(path.Join(parentPath, n), srcPath, version)
+		} else {
+			ext := filepath.Ext(n)
+			if ext == ".md" {
+				jsPath := path.Join(srcPath, "searchIndex.json")
+				tempPath := path.Join(parentPath, n)
+				tempFile, _ := ioutil.ReadFile(tempPath)
+				tempString := string(tempFile)
+				indexed := &Index{Title: tempPath, Body: tempString, Version: version}
+		    b, _ := json.Marshal(indexed)
+				f, _ := os.OpenFile(jsPath, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+				defer f.Close()
+				f.WriteString(string(b))
+				f.WriteString(",")
+
+				res = append(res, string(b))
+			}
+		}
+	}
+
+	return res
 }
