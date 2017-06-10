@@ -9,9 +9,12 @@
   <link rel="stylesheet" href="/docs/common/css/prettify.css">
   <script src="https://chain.com/docs/versions.js"></script>
   <script src="/docs/common/js/jquery.min.js"></script>
+  <script src="/docs/common/js/fuse.min.js"></script>
   <script src="/docs/common/js/layout.js"></script>
   <script src="/docs/common/js/init.js"></script>
   <script src="/docs/common/js/codeSelector.js"></script>
+  <script src="/docs/common/js/search.js"></script>
+  <script src="/docs/1.1/searchIndex.js" charset="utf-8"></script>
   <meta name="viewport" content="width=1060">
 </head>
 <body>
@@ -106,27 +109,9 @@
         <input id="search-input" type="text"/>
         <input id="search-submit" value="Search" type="button"/>
       </div>
-      <div id='version-alert' class='alert'>
-        <p>
-          <strong>Legacy documentation</strong>:
-          You are viewing version <span class='current'>CURRENT</span>;
-          the latest available is <strong class='latest'>LATEST</strong>.
-        </p>
-        <a href='' class='latest-link'>Go to latest →</a>
+      <div id="search-results">
+
       </div>
-
-      {{.Body}}
-
-      <footer>
-        <div id="up-next" style="display:none">
-          <h2 data-backtitle="Back to">Up next</h2>
-
-          <a href="" class="next-step"><span>Placeholder</span>
-            <img src="/docs/common/images/arrow-right.png" class="btn-icon icon-next">
-          </a>
-
-        </div>
-      </footer>
 
     </article>
 

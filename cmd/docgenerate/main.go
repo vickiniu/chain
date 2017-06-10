@@ -52,14 +52,20 @@ func main() {
 
 	wg := new(sync.WaitGroup)
 	for _, v := range versionPaths(srcdir) {
+		jsPath := path.Join(srcdir, "docs", v, "searchIndex.js")
+		os.Create(jsPath)
+		f, _ := os.OpenFile(jsPath, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+		f.WriteString("window.searchIndex = [")
 		makeIndexInputFiles(wg, v, srcdir)
+		defer f.Close()
+		f.WriteString("]")
 	}
 
 	// Generate SDK-specific documentation
-	// for _, v := range versionPaths(srcdir) {
-	// 	wg.Add(1)
-	// 	go makeSdkDocs(wg, v, srcdir, outdir)
-	// }
+	for _, v := range versionPaths(srcdir) {
+		wg.Add(1)
+		go makeSdkDocs(wg, v, srcdir, outdir)
+	}
 	wg.Wait()
 }
 
@@ -147,7 +153,6 @@ func makeIndexInputFiles(wg *sync.WaitGroup, version, srcdir string) {
 	wg.Add(1)
 	versionPath := path.Join(srcdir, "docs", version)
 	srcPath := path.Join(srcdir, "docs")
-	fmt.Println("path:", versionPath)
 	mustListContents(versionPath, srcPath, version)
 }
 
@@ -189,12 +194,11 @@ func versionPaths(srcdir string) []string {
 	return paths
 }
 
-func mustListContents(parentPath string, srcPath string, version string) []string {
+func mustListContents(parentPath string, srcPath string, version string) {
 
 	type Index struct {
-	    Title string
+	    Url string
 			Body string
-			Version string
 	}
 
 	files, err := ioutil.ReadDir(parentPath)
@@ -202,7 +206,6 @@ func mustListContents(parentPath string, srcPath string, version string) []strin
 		log.Fatalln("ReadDir error:", err)
 	}
 
-	var res []string
 	for _, f := range files {
 		n := f.Name()
 
@@ -215,21 +218,20 @@ func mustListContents(parentPath string, srcPath string, version string) []strin
 		} else {
 			ext := filepath.Ext(n)
 			if ext == ".md" {
-				jsPath := path.Join(srcPath, "searchIndex.json")
+				jsPath := path.Join(srcPath, version, "searchIndex.js")
 				tempPath := path.Join(parentPath, n)
 				tempFile, _ := ioutil.ReadFile(tempPath)
 				tempString := string(tempFile)
-				indexed := &Index{Title: tempPath, Body: tempString, Version: version}
+				urlSlice := strings.Split(tempPath, "src/chain")
+				url := urlSlice[len(urlSlice) - 1]
+				indexed := &Index{Url: url, Body: tempString}
 		    b, _ := json.Marshal(indexed)
 				f, _ := os.OpenFile(jsPath, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
 				defer f.Close()
 				f.WriteString(string(b))
 				f.WriteString(",")
-
-				res = append(res, string(b))
 			}
 		}
 	}
 
-	return res
 }
