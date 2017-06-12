@@ -2,6 +2,7 @@ package sinkdb
 
 import (
 	"bytes"
+	"sync"
 
 	"github.com/golang/protobuf/proto"
 
@@ -17,6 +18,7 @@ const (
 // state is a general-purpose data store designed to accumulate
 // and apply replicated updates from a raft log.
 type state struct {
+	mu           sync.Mutex
 	state        map[string][]byte
 	peers        map[uint64]string // id -> addr
 	appliedIndex uint64
@@ -32,18 +34,31 @@ func newState() *state {
 	}
 }
 
+// SetAppliedIndex sets the applied index to the provided index.
+func (s *state) SetAppliedIndex(index uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appliedIndex = index
+}
+
 // SetPeerAddr sets the address for the given peer.
 func (s *state) SetPeerAddr(id uint64, addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.peers[id] = addr
 }
 
 // GetPeerAddr gets the current address for the given peer, if set.
 func (s *state) GetPeerAddr(id uint64) (addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.peers[id]
 }
 
 // RemovePeerAddr deletes the current address for the given peer if it exists.
 func (s *state) RemovePeerAddr(id uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.peers, id)
 }
 
@@ -52,39 +67,50 @@ func (s *state) RemovePeerAddr(id uint64) {
 // when bootstrapping a new node from an existing cluster
 // or when recovering from a file on disk.
 func (s *state) RestoreSnapshot(data []byte, index uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.appliedIndex = index
 	//TODO (ameets): think about having sinkpb in state for restore
 	snapshot := &sinkpb.Snapshot{}
 	err := proto.Unmarshal(data, snapshot)
 	s.peers = snapshot.Peers
-	s.state = snapshot.State //TODO (ameets): need to add version here
+	s.state = snapshot.State
+	s.version = snapshot.Version
 	return errors.Wrap(err)
 }
 
 // Snapshot returns an encoded copy of s suitable for RestoreSnapshot.
 func (s *state) Snapshot() ([]byte, uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	data, err := proto.Marshal(&sinkpb.Snapshot{
-		State: s.state,
-		Peers: s.peers,
+		Version: s.version,
+		State:   s.state,
+		Peers:   s.peers,
 	})
 	return data, s.appliedIndex, errors.Wrap(err)
 }
 
 // Apply applies a raft log entry payload to s. For conditional operations, it
 // returns whether the condition was satisfied.
-func (s *state) Apply(data []byte, index uint64) (satisfied bool, err error) {
+func (s *state) Apply(data []byte, index uint64) (satisfied bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if index < s.appliedIndex {
-		return false, errors.New("entry already applied")
+		panic(errors.New("entry already applied"))
 	}
 	instr := &sinkpb.Instruction{}
-	err = proto.Unmarshal(data, instr)
+	err := proto.Unmarshal(data, instr)
 	if err != nil {
 		// An error here indicates a malformed update
 		// was written to the raft log. We do version
 		// negotiation in the transport layer, so this
 		// should be impossible; by this point, we are
 		// all speaking the same version.
-		return false, errors.Wrap(err)
+		panic(err)
 	}
 
 	s.appliedIndex = index
@@ -97,24 +123,24 @@ func (s *state) Apply(data []byte, index uint64) (satisfied bool, err error) {
 			fallthrough
 		case sinkpb.Cond_KEY_EXISTS:
 			if _, ok := s.state[cond.Key]; ok != y {
-				return false, nil
+				return false
 			}
 		case sinkpb.Cond_NOT_VALUE_EQUAL:
 			y = false
 			fallthrough
 		case sinkpb.Cond_VALUE_EQUAL:
 			if ok := bytes.Equal(s.state[cond.Key], cond.Value); ok != y {
-				return false, nil
+				return false
 			}
 		case sinkpb.Cond_NOT_INDEX_EQUAL:
 			y = false
 			fallthrough
 		case sinkpb.Cond_INDEX_EQUAL:
 			if ok := (s.version[cond.Key] == cond.Index); ok != y {
-				return false, nil
+				return false
 			}
 		default:
-			return false, errors.New("unknown condition type")
+			panic(errors.New("unknown condition type"))
 		}
 	}
 	for _, op := range instr.Operations {
@@ -126,25 +152,35 @@ func (s *state) Apply(data []byte, index uint64) (satisfied bool, err error) {
 			delete(s.state, op.Key)
 			delete(s.version, op.Key)
 		default:
-			return false, errors.New("unknown operation type")
+			panic(errors.New("unknown operation type"))
 		}
 	}
-
-	return true, nil
+	return true
 }
 
 // get performs a provisional read operation.
-func (s *state) get(key string) (value []byte) {
-	return s.state[key]
+func (s *state) get(key string) ([]byte, Version) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b, ok := s.state[key]
+	n := s.version[key]
+	return b, Version{key, ok, n}
 }
 
 // AppliedIndex returns the raft log index (applied index) of current state
 func (s *state) AppliedIndex() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.appliedIndex
 }
 
 // NextNodeID generates an ID for the next node to join the cluster.
 func (s *state) NextNodeID() (id, version uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	id, n := proto.DecodeVarint(s.state[nextNodeID])
 	if n == 0 {
 		panic("raft: cannot decode nextNodeID")
@@ -153,8 +189,8 @@ func (s *state) NextNodeID() (id, version uint64) {
 }
 
 func (s *state) IsAllowedMember(addr string) bool {
-	data := s.get(allowedMemberPrefix + "/" + addr)
-	return len(data) > 0
+	_, ver := s.get(allowedMemberPrefix + "/" + addr)
+	return ver.Exists()
 }
 
 func (s *state) IncrementNextNodeID(oldID uint64, index uint64) (instruction []byte) {

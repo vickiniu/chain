@@ -51,6 +51,7 @@ var (
 		MockHSM       bool `json:"is_mockhsm"`
 		Reset         bool `json:"is_reset"`
 		HTTPOk        bool `json:"is_http_ok"`
+		InitCluster   bool `json:"is_init_cluster"`
 	}
 )
 
@@ -60,11 +61,10 @@ var (
 // storage, the config will be added to sinkdb.
 func Load(ctx context.Context, db pg.DB, sdb *sinkdb.DB) (*Config, error) {
 	c := new(Config)
-	found, err := sdb.Get(ctx, "/core/config", c)
+	ver, err := sdb.Get(ctx, "/core/config", c)
 	if err != nil {
 		return nil, errors.Wrap(err)
-	}
-	if found {
+	} else if ver.Exists() {
 		return c, nil
 	}
 
@@ -207,6 +207,17 @@ func Configure(ctx context.Context, db pg.DB, sdb *sinkdb.DB, httpClient *http.C
 		signingKeys = append(signingKeys, blockPub)
 	}
 
+	// Read the config to ensure that sdb is initialized before
+	// we start writing blocks to Postgres.
+	// TODO(jackson): make configuration idempotent so that we
+	// don't need this.
+	ver, err := sdb.Get(ctx, "/core/config", &Config{})
+	if err != nil {
+		return errors.Wrap(err) // likely uninitialized
+	} else if ver.Exists() {
+		return errors.Wrap(sinkdb.ErrConflict) // already configured
+	}
+
 	if c.IsGenerator {
 		for _, signer := range c.Signers {
 			_, err = url.Parse(signer.Url)
@@ -284,6 +295,7 @@ func tryGenerator(ctx context.Context, url, accessToken, blockchainID string, ht
 // TODO(tessr): make all of this atomic in raft, so we don't get halfway through
 // a postgres->raft migration and fail, losing the second half of the migration
 func migrateAccessTokens(ctx context.Context, db pg.DB, sdb *sinkdb.DB) error {
+	store := authz.NewStore(sdb, GrantPrefix)
 	const q = `SELECT id, type, created FROM access_tokens`
 	var tokens []*accesstoken.Token
 	err := pg.ForQueryRows(ctx, db, q, func(id string, maybeType sql.NullString, created time.Time) {
@@ -315,7 +327,7 @@ func migrateAccessTokens(ctx context.Context, db pg.DB, sdb *sinkdb.DB) error {
 		case "network":
 			grant.Policy = "crosscore"
 		}
-		_, err = authz.StoreGrant(ctx, sdb, grant, GrantPrefix)
+		err = sdb.Exec(ctx, store.Save(ctx, &grant))
 		if err != nil {
 			return errors.Wrap(err)
 		}

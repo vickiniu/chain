@@ -13,7 +13,7 @@ import (
 	"chain/errors"
 	"chain/protocol/bc"
 	"chain/protocol/bc/legacy"
-	"chain/protocol/vmutil"
+	"chain/protocol/vm/vmutil"
 )
 
 // PinName is used to identify the pin
@@ -31,7 +31,10 @@ type Saver interface {
 func Annotated(a *Asset) (*query.AnnotatedAsset, error) {
 	jsonTags := json.RawMessage(`{}`)
 	jsonDefinition := json.RawMessage(`{}`)
-	if len(a.RawDefinition()) > 0 {
+
+	// a.RawDefinition is the asset definition as it appears on the
+	// blockchain, so it's untrusted and may not be valid json.
+	if pg.IsValidJSONB(a.RawDefinition()) {
 		jsonDefinition = json.RawMessage(a.RawDefinition())
 	}
 	if a.Tags != nil {
@@ -104,7 +107,7 @@ func (reg *Registry) ProcessBlocks(ctx context.Context) {
 func (reg *Registry) indexAssets(ctx context.Context, b *legacy.Block) error {
 	var (
 		assetIDs         pq.ByteaArray
-		definitions      pq.StringArray
+		definitions      pq.ByteaArray
 		vmVersions       pq.Int64Array
 		issuancePrograms pq.ByteaArray
 		seen             = make(map[bc.AssetID]bool)
@@ -122,7 +125,7 @@ func (reg *Registry) indexAssets(ctx context.Context, b *legacy.Block) error {
 				definition := ii.AssetDefinition
 				seen[assetID] = true
 				assetIDs = append(assetIDs, assetID.Bytes())
-				definitions = append(definitions, string(definition))
+				definitions = append(definitions, definition)
 				vmVersions = append(vmVersions, int64(ii.VMVersion))
 				issuancePrograms = append(issuancePrograms, in.IssuanceProgram())
 			}

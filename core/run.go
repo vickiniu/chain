@@ -25,6 +25,7 @@ import (
 	"chain/database/pg"
 	"chain/database/sinkdb"
 	"chain/log"
+	"chain/net/http/authz"
 	"chain/protocol"
 	"chain/protocol/bc/legacy"
 )
@@ -42,7 +43,6 @@ type RunOption func(*API)
 // If c is nil, TLS is disabled.
 func UseTLS(c *tls.Config) RunOption {
 	return func(a *API) {
-		a.useTLS = c != nil
 		a.httpClient = new(http.Client)
 		a.httpClient.Transport = &http.Transport{
 			DialContext: (&net.Dialer{
@@ -126,14 +126,12 @@ func RunUnconfigured(ctx context.Context, db pg.DB, sdb *sinkdb.DB, routableAddr
 		db:           db,
 		sdb:          sdb,
 		accessTokens: &accesstoken.CredentialStore{DB: db},
+		grants:       authz.NewStore(sdb, GrantPrefix),
 		mux:          http.NewServeMux(),
+		addr:         routableAddress,
 	}
 	for _, opt := range opts {
 		opt(a)
-	}
-	err := a.addAllowedMember(ctx, struct{ Addr string }{routableAddress})
-	if err != nil {
-		panic("failed to add self to member list: " + err.Error())
 	}
 
 	// Construct the complete http.Handler once.
@@ -185,6 +183,7 @@ func Run(
 		txFeeds:      &txfeed.Tracker{DB: db},
 		indexer:      indexer,
 		accessTokens: &accesstoken.CredentialStore{DB: db},
+		grants:       authz.NewStore(sdb, GrantPrefix),
 		config:       conf,
 		db:           db,
 		sdb:          sdb,
@@ -215,11 +214,6 @@ func Run(
 	// When this cored becomes leader, run a.lead to perform
 	// leader-only Core duties.
 	a.leader = leader.Run(ctx, db, routableAddress, a.lead)
-
-	err = a.addAllowedMember(ctx, struct{ Addr string }{routableAddress})
-	if err != nil {
-		return nil, err
-	}
 
 	// Construct the complete http.Handler once.
 	a.buildHandler()

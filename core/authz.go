@@ -17,8 +17,8 @@ var policyByRoute = map[string][]string{
 	"/create-asset":             {"client-readwrite"},
 	"/update-account-tags":      {"client-readwrite"},
 	"/update-asset-tags":        {"client-readwrite"},
-	"/build-transaction":        {"client-readwrite"},
-	"/submit-transaction":       {"client-readwrite"},
+	"/build-transaction":        {"client-readwrite", "internal"},
+	"/submit-transaction":       {"client-readwrite", "internal"},
 	"/create-control-program":   {"client-readwrite"},
 	"/create-account-receiver":  {"client-readwrite"},
 	"/create-transaction-feed":  {"client-readwrite"},
@@ -44,7 +44,7 @@ var policyByRoute = map[string][]string{
 	crosscoreRPCPrefix + "get-block":         {"crosscore", "crosscore-signblock"},
 	crosscoreRPCPrefix + "get-snapshot-info": {"crosscore", "crosscore-signblock"},
 	crosscoreRPCPrefix + "get-snapshot":      {"crosscore", "crosscore-signblock"},
-	crosscoreRPCPrefix + "signer/sign-block": {"crosscore-signblock"},
+	crosscoreRPCPrefix + "signer/sign-block": {"internal", "crosscore-signblock"},
 	crosscoreRPCPrefix + "block-height":      {"crosscore", "crosscore-signblock"},
 
 	"/list-authorization-grants":  {"client-readwrite", "client-readonly", "internal"},
@@ -54,14 +54,12 @@ var policyByRoute = map[string][]string{
 	"/list-access-tokens":         {"client-readwrite", "client-readonly"},
 	"/delete-access-token":        {"client-readwrite"},
 	"/add-allowed-member":         {"internal"},
+	"/init-cluster":               {"internal"},
+	"/join-cluster":               {"internal"},
 	"/configure":                  {"client-readwrite", "internal"},
 	"/info":                       {"client-readwrite", "client-readonly", "crosscore", "crosscore-signblock", "monitoring", "internal"},
 
-	"/debug/vars":          {"client-readwrite", "client-readonly", "monitoring"}, // should monitoring endpoints also be available to any other policy-holders?
-	"/debug/pprof":         {"client-readwrite", "client-readonly", "monitoring"},
-	"/debug/pprof/profile": {"client-readwrite", "client-readonly", "monitoring"},
-	"/debug/pprof/symbol":  {"client-readwrite", "client-readonly", "monitoring"},
-	"/debug/pprof/trace":   {"client-readwrite", "client-readonly", "monitoring"},
+	"/debug/": {"client-readwrite", "client-readonly", "monitoring"},
 
 	"/raft/": {"internal"},
 

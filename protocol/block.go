@@ -12,7 +12,7 @@ import (
 	"chain/protocol/bc/legacy"
 	"chain/protocol/state"
 	"chain/protocol/validation"
-	"chain/protocol/vmutil"
+	"chain/protocol/vm/vmutil"
 )
 
 // maxBlockTxs limits the number of transactions
@@ -84,6 +84,17 @@ func (c *Chain) GenerateBlock(ctx context.Context, prev *legacy.Block, snapshot 
 		// Filter out transactions that are not well-formed.
 		err := c.ValidateTx(tx.Tx)
 		if err != nil {
+			// TODO(bobg): log this?
+			continue
+		}
+
+		// Filter out transactions that are not yet valid, or no longer
+		// valid, per the block's timestamp.
+		if tx.Tx.MinTimeMs > 0 && tx.Tx.MinTimeMs > b.TimestampMS {
+			// TODO(bobg): log this?
+			continue
+		}
+		if tx.Tx.MaxTimeMs > 0 && tx.Tx.MaxTimeMs < b.TimestampMS {
 			// TODO(bobg): log this?
 			continue
 		}

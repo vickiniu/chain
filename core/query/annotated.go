@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"chain/crypto/ed25519/chainkd"
+	"chain/database/pg"
 	chainjson "chain/encoding/json"
 	"chain/protocol/bc"
 	"chain/protocol/bc/legacy"
-	"chain/protocol/vmutil"
+	"chain/protocol/vm/vmutil"
 )
 
 type AnnotatedTx struct {
@@ -126,11 +127,10 @@ func buildAnnotatedTransaction(orig *legacy.Tx, b *legacy.Block, indexInBlock ui
 		Inputs:                 make([]*AnnotatedInput, 0, len(orig.Inputs)),
 		Outputs:                make([]*AnnotatedOutput, 0, len(orig.Outputs)),
 	}
-	if len(orig.ReferenceData) > 0 {
+	if pg.IsValidJSONB(orig.ReferenceData) {
 		referenceData := json.RawMessage(orig.ReferenceData)
 		tx.ReferenceData = &referenceData
 	}
-
 	for i := range orig.Inputs {
 		tx.Inputs = append(tx.Inputs, buildAnnotatedInput(orig, uint32(i)))
 	}
@@ -149,8 +149,7 @@ func buildAnnotatedInput(tx *legacy.Tx, i uint32) *AnnotatedInput {
 		AssetTags:       &emptyJSONObject,
 		ReferenceData:   &emptyJSONObject,
 	}
-
-	if len(orig.ReferenceData) > 0 {
+	if pg.IsValidJSONB(orig.ReferenceData) {
 		referenceData := json.RawMessage(orig.ReferenceData)
 		in.ReferenceData = &referenceData
 	}
@@ -183,7 +182,7 @@ func buildAnnotatedOutput(tx *legacy.Tx, idx int) *AnnotatedOutput {
 		ControlProgram:  orig.ControlProgram,
 		ReferenceData:   &emptyJSONObject,
 	}
-	if len(orig.ReferenceData) > 0 {
+	if pg.IsValidJSONB(orig.ReferenceData) {
 		referenceData := json.RawMessage(orig.ReferenceData)
 		out.ReferenceData = &referenceData
 	}

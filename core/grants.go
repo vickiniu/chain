@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"time"
 
 	"chain/database/sinkdb"
 	"chain/errors"
@@ -31,6 +33,53 @@ var (
 	// a protected grant.
 	errCreateProtectedGrant = errors.New("cannot manually create a protected grant")
 )
+
+// extraGrantLoader is an authz.Loader that wraps loader with extra grants.
+type extraGrantLoader struct {
+	loader authz.Loader
+	extra  map[string][]*authz.Grant // by policy
+}
+
+func (s *extraGrantLoader) Load(ctx context.Context, policy []string) ([]*authz.Grant, error) {
+	g, err := s.loader.Load(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range policy {
+		g = append(g, s.extra[p]...)
+	}
+	return g, nil
+}
+
+func grantStore(sdb *sinkdb.DB, extra []*authz.Grant, subj *pkix.Name) authz.Loader {
+	ext := map[string][]*authz.Grant{
+		"public": {{GuardType: "any", Policy: "public"}},
+	}
+	for _, g := range extra {
+		ext[g.Policy] = append(ext[g.Policy], g)
+	}
+	if subj != nil {
+		ext["internal"] = append(ext["internal"], &authz.Grant{
+			Policy:    "internal",
+			GuardType: "x509",
+			GuardData: encodeX509GuardData(*subj),
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			Protected: true,
+		})
+	}
+	return &extraGrantLoader{
+		loader: authz.NewStore(sdb, GrantPrefix),
+		extra:  ext,
+	}
+}
+
+func encodeX509GuardData(subj pkix.Name) []byte {
+	v := struct {
+		Subject authz.PKIXName `json:"subject"`
+	}{authz.PKIXName(subj)}
+	d, _ := json.Marshal(v)
+	return d
+}
 
 func (a *API) createGrant(ctx context.Context, x apiGrant) (*apiGrant, error) {
 	if x.Protected {
@@ -80,13 +129,13 @@ func (a *API) createGrant(ctx context.Context, x apiGrant) (*apiGrant, error) {
 		return nil, errors.Wrap(err)
 	}
 
-	params := authz.Grant{
+	g := &authz.Grant{
 		GuardType: x.GuardType,
 		GuardData: guardData,
 		Policy:    x.Policy,
 		Protected: false, // grants created through the createGrant RPC cannot be protected
 	}
-	g, err := authz.StoreGrant(ctx, a.sdb, params, GrantPrefix)
+	err = a.sdb.Exec(ctx, a.grants.Save(ctx, g))
 	if err != nil {
 		return nil, err
 	}
@@ -157,31 +206,10 @@ func (a *API) deleteGrant(ctx context.Context, x apiGrant) error {
 		Protected: x.Protected, // should always be false
 	}
 
-	var grantList authz.GrantList
-	found, err := a.sdb.Get(ctx, GrantPrefix+x.Policy, &grantList)
-	if err != nil || !found {
-		return errors.Wrap(err) // if !found, errors.Wrap(err) is nil
-	}
-
-	var keep []*authz.Grant
-	for _, g := range grantList.Grants {
-		if !authz.EqualGrants(*g, toDelete) {
-			keep = append(keep, g)
-		}
-	}
-
-	// We didn't match any grants, don't need to do an update. Return success
-	if len(keep) == len(grantList.Grants) {
-		return nil
-	}
-
-	gList := &authz.GrantList{Grants: keep}
-	err = a.sdb.Exec(ctx, sinkdb.Set(GrantPrefix+x.Policy, gList))
-	if err != nil {
-		return errors.Wrap(err)
-	}
-
-	return nil
+	err = a.sdb.Exec(ctx, a.grants.Delete(ctx, x.Policy, func(g *authz.Grant) bool {
+		return authz.EqualGrants(*g, toDelete)
+	}))
+	return errors.Wrap(err)
 }
 
 // deleteGrantsByAccessToken is invoked after an access token is deleted, and the
@@ -189,36 +217,15 @@ func (a *API) deleteGrant(ctx context.Context, x apiGrant) error {
 // protected.
 func (a *API) deleteGrantsByAccessToken(ctx context.Context, token string) error {
 	for _, p := range Policies {
-		var grantList authz.GrantList
-		_, err := a.sdb.Get(ctx, GrantPrefix+p, &grantList)
-		if err != nil {
-			return errors.Wrap(err)
-		}
-
-		var keep []*authz.Grant
-		for _, g := range grantList.Grants {
+		err := a.sdb.Exec(ctx, a.grants.Delete(ctx, p, func(g *authz.Grant) bool {
 			if g.GuardType != "access_token" {
-				keep = append(keep, g)
-				continue
+				return false
 			}
 			var data map[string]interface{}
-			err = json.Unmarshal(g.GuardData, &data)
-			if err != nil {
-				return errors.Wrap(err)
-			}
-
-			if id, _ := data["id"].(string); id != token {
-				keep = append(keep, g)
-			}
-		}
-
-		// We didn't match any grants, don't need to do an update
-		if len(keep) == len(grantList.Grants) {
-			continue
-		}
-
-		gList := &authz.GrantList{Grants: keep}
-		err = a.sdb.Exec(ctx, sinkdb.Set(GrantPrefix+p, gList))
+			json.Unmarshal(g.GuardData, &data)
+			id, _ := data["id"].(string)
+			return id == token
+		}))
 		if err != nil {
 			return errors.Wrap(err)
 		}

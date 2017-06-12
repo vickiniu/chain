@@ -35,7 +35,7 @@ type Client struct {
 	BaseURL      string
 	AccessToken  string
 	Username     string
-	BuildTag     string
+	Version      string
 	BlockchainID string
 	CoreID       string
 
@@ -45,8 +45,8 @@ type Client struct {
 }
 
 func (c Client) userAgent() string {
-	return fmt.Sprintf("Chain; process=%s; buildtag=%s; blockchainID=%s",
-		c.Username, c.BuildTag, c.BlockchainID)
+	return fmt.Sprintf("Chain; process=%s; version=%s; blockchainID=%s",
+		c.Username, c.Version, c.BlockchainID)
 }
 
 // ErrStatusCode is an error returned when an rpc fails with a non-200
@@ -148,10 +148,8 @@ func (c *Client) CallRaw(ctx context.Context, path string, request interface{}) 
 		}
 
 		// Attach formatted error message, if available
-		var errData httperror.Response
-		err := json.NewDecoder(resp.Body).Decode(&errData)
-		if err == nil && errData.ChainCode != "" {
-			resErr.ErrorData = &errData
+		if errData, ok := httperror.Parse(resp.Body); ok {
+			resErr.ErrorData = errData
 		}
 
 		return nil, resErr

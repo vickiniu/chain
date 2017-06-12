@@ -4,17 +4,23 @@ package sinkdb
 import (
 	"context"
 	"net/http"
+	"sort"
 
 	"github.com/golang/protobuf/proto"
 
-	"chain/database/raft"
 	"chain/database/sinkdb/internal/sinkpb"
+	"chain/errors"
+	"chain/net/raft"
 )
 
+// ErrConflict is returned by Exec when an instruction was
+// not completed because its preconditions were not met.
+var ErrConflict = errors.New("transaction conflict")
+
 // Open initializes the key-value store and returns a database handle.
-func Open(laddr, dir, bootURL string, httpClient *http.Client, useTLS bool) (*DB, error) {
+func Open(laddr, dir string, httpClient *http.Client) (*DB, error) {
 	state := newState()
-	sv, err := raft.Start(laddr, dir, bootURL, httpClient, useTLS, state)
+	sv, err := raft.Start(laddr, dir, httpClient, state)
 	if err != nil {
 		return nil, err
 	}
@@ -28,63 +34,60 @@ type DB struct {
 	raft  *raft.Service
 }
 
-// Exec executes the provided operations. If all of the provided conditionals
-// are met, all of the provided effects are applied atomically.
+// Exec executes the provided operations
+// after combining them with All.
 func (db *DB) Exec(ctx context.Context, ops ...Op) error {
-	instr := new(sinkpb.Instruction)
-	for _, op := range ops {
-		if op.err != nil {
-			return op.err
+	all := All(ops...)
+	if all.err != nil {
+		return all.err
+	}
+
+	// Disallow multiple writes to the same key.
+	sort.Slice(all.effects, func(i, j int) bool {
+		return all.effects[i].Key < all.effects[j].Key
+	})
+	var lastKey string
+	for _, e := range all.effects {
+		if e.Key == lastKey {
+			err := errors.New("duplicate write")
+			return errors.Wrap(err, e.Key)
 		}
-		instr.Conditions = append(instr.Conditions, op.conds...)
-		instr.Operations = append(instr.Operations, op.effects...)
+		lastKey = e.Key
 	}
-	encoded, err := proto.Marshal(instr)
-	if err != nil {
-		return err
-	}
-	return db.raft.Exec(ctx, encoded)
-}
 
-// Get performs a linearizable read of the provided key. The
-// read value is unmarshalled into v.
-func (db *DB) Get(ctx context.Context, key string, v proto.Message) (found bool, err error) {
-	err = db.raft.WaitRead(ctx)
-	if err != nil {
-		return false, err
-	}
-	buf := db.state.get(key)
-	// TODO(jackson): propagate real key existence bool
-	if len(buf) == 0 {
-		return false, err
-	}
-	return true, proto.Unmarshal(buf, v)
-}
-
-// GetStale performs a non-linearizable read of the provided key.
-// The value may be stale. The read value is unmarshalled into v.
-func (db *DB) GetStale(key string, v proto.Message) (found bool, err error) {
-	buf := db.state.get(key) // read directly from state
-	// TODO(jackson): propagate real key existence bool
-	if len(buf) == 0 {
-		return false, err
-	}
-	return true, proto.Unmarshal(buf, v)
-}
-
-// AddAllowedMember configures sinkdb to allow the provided address
-// to participate in Raft.
-func (db *DB) AddAllowedMember(ctx context.Context, addr string) error {
-	instr, err := proto.Marshal(&sinkpb.Instruction{
-		Operations: []*sinkpb.Op{{
-			Key:   allowedMemberPrefix + "/" + addr,
-			Value: []byte{0x01},
-		}},
+	encoded, err := proto.Marshal(&sinkpb.Instruction{
+		Conditions: all.conds,
+		Operations: all.effects,
 	})
 	if err != nil {
 		return err
 	}
-	return db.raft.Exec(ctx, instr)
+	satisfied, err := db.raft.Exec(ctx, encoded)
+	if err != nil {
+		return err
+	}
+	if !satisfied {
+		return ErrConflict
+	}
+	return nil
+}
+
+// Get performs a linearizable read of the provided key. The
+// read value is unmarshalled into v.
+func (db *DB) Get(ctx context.Context, key string, v proto.Message) (Version, error) {
+	err := db.raft.WaitRead(ctx)
+	if err != nil {
+		return Version{}, err
+	}
+	buf, ver := db.state.get(key)
+	return ver, proto.Unmarshal(buf, v)
+}
+
+// GetStale performs a non-linearizable read of the provided key.
+// The value may be stale. The read value is unmarshalled into v.
+func (db *DB) GetStale(key string, v proto.Message) (Version, error) {
+	buf, ver := db.state.get(key) // read directly from state
+	return ver, proto.Unmarshal(buf, v)
 }
 
 // RaftService returns the raft service used for replication.

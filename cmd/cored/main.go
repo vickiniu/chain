@@ -41,8 +41,10 @@ import (
 	chainlog "chain/log"
 	"chain/log/rotation"
 	"chain/log/splunk"
+	"chain/net/http/authz"
 	"chain/net/http/limit"
 	"chain/net/http/reqid"
+	"chain/net/raft"
 	"chain/protocol"
 	"chain/protocol/bc"
 	"chain/protocol/bc/legacy"
@@ -68,7 +70,8 @@ var (
 	rpsRemoteAddr = env.Int("RATELIMIT_REMOTE_ADDR", 0) // reqs/sec
 	indexTxs      = env.Bool("INDEX_TRANSACTIONS", true)
 	home          = core.HomeDirFromEnvironment()
-	bootURL       = env.String("BOOTURL", "")
+
+	version string // initialized in init()
 
 	// build vars; initialized by the linker
 	buildTag    = "?"
@@ -80,10 +83,12 @@ var (
 	// By default, a core is not able to reset its data.
 	// This feature can be turned on with the reset build tag.
 	resetIfAllowedAndRequested = func(pg.DB, *sinkdb.DB) {}
+
+	// See localhost_auth.go.
+	builtinGrants []*authz.Grant
 )
 
 func init() {
-	var version string
 	if buildTag != "?" {
 		// build tag with chain-core-server- prefix indicates official release
 		version = strings.TrimPrefix(buildTag, "chain-core-server-")
@@ -120,6 +125,7 @@ func main() {
 	fmt.Printf("localhost_auth: %t\n", config.BuildConfig.LocalhostAuth)
 	fmt.Printf("reset: %t\n", config.BuildConfig.Reset)
 	fmt.Printf("http_ok: %t\n", config.BuildConfig.HTTPOk)
+	fmt.Printf("init_cluster: %t\n", config.BuildConfig.InitCluster)
 
 	if *v {
 		return
@@ -164,9 +170,18 @@ func main() {
 	}
 
 	raftDir := filepath.Join(home, "raft") // TODO(kr): better name for this
-	sdb, err := sinkdb.Open(*listenAddr, raftDir, *bootURL, httpClient, tlsConfig != nil)
+	sdb, err := sinkdb.Open(*listenAddr, raftDir, httpClient)
 	if err != nil {
 		chainlog.Fatalkv(ctx, chainlog.KeyError, err)
+	}
+
+	// In Developer Edition, automatically create a new cluster if
+	// there's no existing raft cluster.
+	if config.BuildConfig.InitCluster {
+		err = sdb.RaftService().Init()
+		if err != nil && errors.Root(err) != raft.ErrExistingCluster {
+			chainlog.Fatalkv(ctx, chainlog.KeyError, err)
+		}
 	}
 
 	driver := pg.NewDriver()
@@ -207,7 +222,7 @@ func main() {
 	mux.Handle("/", &coreHandler)
 
 	var handler http.Handler = mux
-	handler = core.AuthHandler(handler, sdb, accessTokens, tlsConfig)
+	handler = core.AuthHandler(handler, sdb, accessTokens, tlsConfig, builtinGrants)
 	handler = core.RedirectHandler(handler)
 	handler = reqid.Handler(handler)
 
@@ -237,7 +252,7 @@ func main() {
 	resetIfAllowedAndRequested(db, sdb)
 
 	conf, err := config.Load(ctx, db, sdb)
-	if err != nil {
+	if err != nil && errors.Root(err) != raft.ErrUninitialized {
 		chainlog.Fatalkv(ctx, chainlog.KeyError, err)
 	}
 
@@ -252,9 +267,9 @@ func main() {
 	}
 	expvar.NewString("processID").Set(processID)
 
-	log.SetPrefix("cored-" + buildTag + ": ")
+	log.SetPrefix("cored-" + version + ": ")
 	log.SetFlags(log.Lshortfile)
-	chainlog.SetPrefix(append([]interface{}{"app", "cored", "buildtag", buildTag, "processID", processID}, race...)...)
+	chainlog.SetPrefix(append([]interface{}{"app", "cored", "version", version, "processID", processID}, race...)...)
 	chainlog.SetOutput(logWriter())
 
 	var h http.Handler
@@ -338,7 +353,7 @@ func launchConfiguredCore(ctx context.Context, sdb *sinkdb.DB, db *sql.DB, conf 
 		if localSigner != nil {
 			signers = append(signers, localSigner)
 		}
-		for _, signer := range remoteSignerInfo(ctx, processID, buildTag, conf.BlockchainId.String(), conf, httpClient) {
+		for _, signer := range remoteSignerInfo(ctx, processID, conf.BlockchainId.String(), conf, httpClient) {
 			signers = append(signers, signer)
 		}
 		c.MaxIssuanceWindow = bc.MillisDuration(conf.MaxIssuanceWindowMs)
@@ -351,7 +366,7 @@ func launchConfiguredCore(ctx context.Context, sdb *sinkdb.DB, db *sql.DB, conf 
 			AccessToken:  conf.GeneratorAccessToken,
 			Username:     processID,
 			CoreID:       conf.Id,
-			BuildTag:     buildTag,
+			Version:      version,
 			BlockchainID: conf.BlockchainId.String(),
 			Client:       httpClient,
 		}))
@@ -376,7 +391,7 @@ func initializeLocalSigner(ctx context.Context, conf *config.Config, db pg.DB, c
 			AccessToken:  conf.BlockHsmAccessToken,
 			Username:     processID,
 			CoreID:       conf.Id,
-			BuildTag:     buildTag,
+			Version:      version,
 			BlockchainID: conf.BlockchainId.String(),
 			Client:       httpClient,
 		}}
@@ -406,7 +421,7 @@ func (h *remoteHSM) Sign(ctx context.Context, pk ed25519.PublicKey, bh *legacy.B
 	return
 }
 
-func remoteSignerInfo(ctx context.Context, processID, buildTag, blockchainID string, conf *config.Config, httpClient *http.Client) (a []*remoteSigner) {
+func remoteSignerInfo(ctx context.Context, processID, blockchainID string, conf *config.Config, httpClient *http.Client) (a []*remoteSigner) {
 	for _, signer := range conf.Signers {
 		u, err := url.Parse(signer.Url)
 		if err != nil {
@@ -420,7 +435,7 @@ func remoteSignerInfo(ctx context.Context, processID, buildTag, blockchainID str
 			AccessToken:  signer.AccessToken,
 			Username:     processID,
 			CoreID:       conf.Id,
-			BuildTag:     buildTag,
+			Version:      version,
 			BlockchainID: blockchainID,
 			Client:       httpClient,
 		}

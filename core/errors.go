@@ -16,10 +16,12 @@ import (
 	"chain/core/txbuilder"
 	"chain/core/txfeed"
 	"chain/database/pg"
+	"chain/database/sinkdb"
 	"chain/errors"
 	"chain/net/http/authz"
 	"chain/net/http/httperror"
 	"chain/net/http/httpjson"
+	"chain/net/raft"
 	"chain/protocol"
 )
 
@@ -63,6 +65,7 @@ var errorFormatter = httperror.Formatter{
 		errNotAuthenticated:        {401, "CH009", "Request could not be authenticated"},
 		txbuilder.ErrMissingFields: {400, "CH010", "One or more fields are missing"},
 		authz.ErrNotAuthorized:     {403, "CH011", "Request is unauthorized"},
+		sinkdb.ErrConflict:         {409, "CH012", "Conflict processing request"},
 		asset.ErrDuplicateAlias:    {400, "CH050", "Alias already exists"},
 		account.ErrDuplicateAlias:  {400, "CH050", "Alias already exists"},
 		txfeed.ErrDuplicateAlias:   {400, "CH050", "Alias already exists"},
@@ -86,6 +89,11 @@ var errorFormatter = httperror.Formatter{
 		errNoClientTokens:              {400, "CH120", "Cannot enable client authentication with no client tokens"},
 		blocksigner.ErrConsensusChange: {400, "CH150", "Refuse to sign block with consensus change"},
 		errMissingAddr:                 {400, "CH160", "Address is missing"},
+		errInvalidAddr:                 {400, "CH161", "Address is invalid"},
+		raft.ErrAddressNotAllowed:      {400, "CH162", "Address is not allowed"},
+		raft.ErrUninitialized:          {400, "CH163", "Cluster not initialized"},
+		raft.ErrExistingCluster:        {400, "CH164", "Already connected to a cluster"},
+		raft.ErrPeerUninitialized:      {400, "CH165", "Peer node is uninitialized"},
 
 		// Signers error namespace (2xx)
 		signers.ErrBadQuorum: {400, "CH200", "Quorum must be greater than 1 and less than or equal to the length of xpubs"},

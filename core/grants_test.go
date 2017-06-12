@@ -3,13 +3,12 @@ package core
 import (
 	"context"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"chain/core/accesstoken"
 	"chain/database/pg/pgtest"
-	"chain/database/sinkdb"
+	"chain/database/sinkdb/sinkdbtest"
+	"chain/net/http/authz"
 )
 
 func TestCreatGrantValidation(t *testing.T) {
@@ -22,27 +21,12 @@ func TestCreatGrantValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	currentDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raftDir := filepath.Join(currentDir, "/.testraft")
-	err = os.Mkdir(raftDir, 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(raftDir)
-
-	sdb, err := sinkdb.Open("", raftDir, "", new(http.Client), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	sdb := sinkdbtest.NewDB(t)
 	api := &API{
 		mux:          http.NewServeMux(),
 		sdb:          sdb,
 		accessTokens: accessTokens,
+		grants:       authz.NewStore(sdb, GrantPrefix),
 	}
 
 	validCases := []apiGrant{
@@ -151,27 +135,12 @@ func TestDeleteGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	currentDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raftDir := filepath.Join(currentDir, "/.testraft")
-	err = os.Mkdir(raftDir, 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(raftDir)
-
-	sdb, err := sinkdb.Open("", raftDir, "", new(http.Client), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	sdb := sinkdbtest.NewDB(t)
 	api := &API{
 		mux:          http.NewServeMux(),
 		sdb:          sdb,
 		accessTokens: accessTokens,
+		grants:       authz.NewStore(sdb, GrantPrefix),
 	}
 
 	fixture := []apiGrant{
@@ -268,27 +237,12 @@ func TestDeleteGrantsByAccessToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	currentDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raftDir := filepath.Join(currentDir, "/.testraft")
-	err = os.Mkdir(raftDir, 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(raftDir)
-
-	sdb, err := sinkdb.Open("", raftDir, "", new(http.Client), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	sdb := sinkdbtest.NewDB(t)
 	api := &API{
 		mux:          http.NewServeMux(),
 		sdb:          sdb,
 		accessTokens: accessTokens,
+		grants:       authz.NewStore(sdb, GrantPrefix),
 	}
 
 	// fixture data includes four grants:

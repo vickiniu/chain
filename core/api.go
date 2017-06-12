@@ -65,6 +65,7 @@ type API struct {
 	indexer         *query.Indexer
 	txFeeds         *txfeed.Tracker
 	accessTokens    *accesstoken.CredentialStore
+	grants          *authz.Store
 	config          *config.Config
 	submitter       txbuilder.Submitter
 	db              pg.DB
@@ -78,7 +79,6 @@ type API struct {
 	generator       *generator.Generator
 	remoteGenerator *rpc.Client
 	indexTxs        bool
-	useTLS          bool
 	internalSubj    pkix.Name
 	httpClient      *http.Client
 
@@ -179,6 +179,8 @@ func (a *API) buildHandler() {
 	m.Handle("/list-access-tokens", jsonHandler(a.listAccessTokens))
 	m.Handle("/delete-access-token", jsonHandler(a.deleteAccessToken))
 	m.Handle("/add-allowed-member", jsonHandler(a.addAllowedMember))
+	m.Handle("/init-cluster", jsonHandler(a.initCluster))
+	m.Handle("/join-cluster", jsonHandler(a.joinCluster))
 	m.Handle("/configure", jsonHandler(a.configure))
 	m.Handle("/info", jsonHandler(a.info))
 
@@ -250,20 +252,22 @@ type page struct {
 	LastPage bool         `json:"last_page"`
 }
 
-func AuthHandler(handler http.Handler, sdb *sinkdb.DB, accessTokens *accesstoken.CredentialStore, tlsConfig *tls.Config) http.Handler {
-	authorizer := authz.NewAuthorizer(sdb, GrantPrefix, policyByRoute)
-
+func AuthHandler(handler http.Handler, sdb *sinkdb.DB, accessTokens *accesstoken.CredentialStore, tlsConfig *tls.Config, extraGrants []*authz.Grant) http.Handler {
+	var subj *pkix.Name
 	rootCAs := x509.NewCertPool()
 	if tlsConfig != nil {
 		x509Cert, err := x509.ParseCertificate(tlsConfig.Certificates[0].Certificate[0])
 		if err != nil {
 			log.Fatalkv(context.Background(), log.KeyError, err)
 		}
-
-		authorizer.GrantInternal(x509Cert.Subject)
+		subj = &x509Cert.Subject
 		rootCAs = tlsConfig.ClientCAs
 	}
 
+	authorizer := authz.NewAuthorizer(
+		grantStore(sdb, extraGrants, subj),
+		policyByRoute,
+	)
 	authenticator := authn.NewAPI(accessTokens, crosscoreRPCPrefix, rootCAs)
 
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -346,9 +350,9 @@ func (a *API) leaderSignHandler(f func(context.Context, *legacy.Block) ([]byte, 
 }
 
 // forwardToLeader forwards the current request to the core's leader
-// process. It propagates the same credentials used in the current
-// request. For that reason, it cannot be used outside of a request-
-// handling context.
+// process. It relies on a.httpClient's TLS configuration for authenticating
+// with the leader cored. The internal policy must be authorized for the
+// provided path.
 func (a *API) forwardToLeader(ctx context.Context, path string, body interface{}, resp interface{}) error {
 	addr, err := a.leader.Address(ctx)
 	if err != nil {
@@ -363,24 +367,9 @@ func (a *API) forwardToLeader(ctx context.Context, path string, body interface{}
 	}
 
 	l := &rpc.Client{
-		BaseURL: "http://" + addr,
+		BaseURL: "https://" + addr,
 		Client:  a.httpClient,
 	}
-	if a.useTLS {
-		l.BaseURL = "https://" + addr
-	}
-
-	// Forward the request credentials if we have them.
-	// TODO(jackson): Don't use the incoming request's credentials and
-	// have an alternative authentication scheme between processes of the
-	// same Core. For now, we only call the leader for the purpose of
-	// forwarding a request, so this is OK.
-	req := httpjson.Request(ctx)
-	user, pass, ok := req.BasicAuth()
-	if ok {
-		l.AccessToken = fmt.Sprintf("%s:%s", user, pass)
-	}
-
 	return l.Call(ctx, path, body, resp)
 }
 

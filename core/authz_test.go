@@ -6,48 +6,32 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"chain/core/accesstoken"
 	"chain/database/pg/pgtest"
-	"chain/database/sinkdb"
+	"chain/database/sinkdb/sinkdbtest"
+	"chain/net/http/authz"
 )
 
 func TestAuthz(t *testing.T) {
 	ctx := context.Background()
 	_, db := pgtest.NewDB(t, pgtest.SchemaPath)
 	accessTokens := &accesstoken.CredentialStore{db}
-
-	currentDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raftDir := filepath.Join(currentDir, "/.testraft")
-	err = os.Mkdir(raftDir, 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(raftDir)
-
-	sdb, err := sinkdb.Open("", raftDir, "", new(http.Client), false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sdb := sinkdbtest.NewDB(t)
 
 	mux := http.NewServeMux()
 	mux.Handle("/raft/", sdb.RaftService())
 
 	var handler http.Handler = mux
-	handler = AuthHandler(handler, sdb, accessTokens, nil)
+	handler = AuthHandler(handler, sdb, accessTokens, nil, nil)
 
 	api := &API{
 		mux:          http.NewServeMux(),
 		sdb:          sdb,
 		accessTokens: accessTokens,
+		grants:       authz.NewStore(sdb, GrantPrefix),
 	}
 	api.buildHandler()
 	mux.Handle("/", api)
@@ -123,7 +107,7 @@ func TestAuthz(t *testing.T) {
 			"crosscore":           false,
 			"crosscore-signblock": true,
 			"monitoring":          false,
-			"internal":            false,
+			"internal":            true,
 			"public":              false,
 		},
 		"/info": map[string]bool{

@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -147,6 +149,46 @@ func (a *API) configure(ctx context.Context, x *config.Config) error {
 		return err
 	}
 
+	closeConnOK(httpjson.ResponseWriter(ctx), httpjson.Request(ctx))
+	execSelf("")
+	panic("unreached")
+}
+
+func (a *API) initCluster(ctx context.Context) error {
+	err := a.sdb.RaftService().Init()
+	if err != nil {
+		return err
+	}
+
+	// TODO(jackson): make adding this process's address
+	// atomic with initializing the cluster
+
+	// add this process's address as an allowed member
+	err = a.addAllowedMember(ctx, struct{ Addr string }{a.addr})
+	return err
+}
+
+func (a *API) joinCluster(ctx context.Context, x struct {
+	BootAddress string `json:"boot_address"`
+}) error {
+	// validate the format of the boot address
+	_, _, err := net.SplitHostPort(x.BootAddress)
+	if err != nil {
+		newerr := errors.Sub(errInvalidAddr, err)
+		if addrErr, ok := err.(*net.AddrError); ok {
+			newerr = errors.WithDetail(newerr, addrErr.Err)
+		}
+		return newerr
+	}
+
+	bootURL := fmt.Sprintf("https://%s", x.BootAddress)
+	err = a.sdb.RaftService().Join(bootURL)
+	if err != nil {
+		return err
+	}
+
+	// The cluster we joined might already be configured. Exec self
+	// to restart cored and attempt to load the config.
 	closeConnOK(httpjson.ResponseWriter(ctx), httpjson.Request(ctx))
 	execSelf("")
 	panic("unreached")

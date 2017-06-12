@@ -2,34 +2,30 @@ package sinkdb
 
 import (
 	"context"
+	"io/ioutil"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 func TestRemovePeerAddr(t *testing.T) {
 	s := state{peers: map[uint64]string{1: "1.2.3.4:567"}}
-	want := state{peers: map[uint64]string{}}
+	wantPeers := map[uint64]string{}
 
 	s.RemovePeerAddr(1)
-	if !reflect.DeepEqual(s, want) {
-		t.Errorf("RemovePeerAddr(%d) => %v want %v", 1, s, want)
+	if !reflect.DeepEqual(s.peers, wantPeers) {
+		t.Errorf("RemovePeerAddr(%d) => %v want %v", 1, s.peers, wantPeers)
 	}
 }
 
 func TestSetPeerAddr(t *testing.T) {
 	s := newState()
-	want := &state{
-		state:   s.state,
-		peers:   map[uint64]string{1: "1.2.3.4:567"},
-		version: s.version,
-	}
+	wantPeers := map[uint64]string{1: "1.2.3.4:567"}
 
 	s.SetPeerAddr(1, "1.2.3.4:567")
-	if !reflect.DeepEqual(s, want) {
-		t.Errorf("s.SetPeerAddr(1, \"1.2.3.4:567\") => %v, want %v", s, want)
+	if !reflect.DeepEqual(s.peers, wantPeers) {
+		t.Errorf("s.SetPeerAddr(1, \"1.2.3.4:567\") => %v, want %v", s.peers, wantPeers)
 	}
 }
 
@@ -45,24 +41,21 @@ func TestGetPeerAddr(t *testing.T) {
 }
 
 func TestAllowedMember(t *testing.T) {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raftDir := filepath.Join(currentDir, "/.testraft")
-	err = os.Mkdir(raftDir, 0700)
+	raftDir, err := ioutil.TempDir("", "sinkdb")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(raftDir)
 
-	sdb, err := Open("", raftDir, "", new(http.Client), false)
+	sdb, err := Open("", raftDir, new(http.Client))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	err = sdb.AddAllowedMember(context.Background(), "1234")
+	err = sdb.RaftService().Init()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sdb.Exec(context.Background(), AddAllowedMember("1234"))
 	if err != nil {
 		t.Fatal("unexpected error", err)
 	}
