@@ -102,10 +102,10 @@
   </div>
   <div id="doc-wrapper" tabindex="0">
     <article id="doc-content" class="{{.Filename}}">
-      <div id="search-bar">
-        <input id="search-input" type="text"/>
-        <input id="search-submit" value="Search" type="button"/>
-      </div>
+      <form id="search">
+        <input id="search-field" type="text" name="q" value="" placeholder="Search documentation">
+        <a href="#" id="search-submit" class="btn success">Search</a>
+      </form>
       <div id='version-alert' class='alert'>
         <p>
           <strong>Legacy documentation</strong>:
@@ -152,7 +152,7 @@
   }
 
   $('#search-submit').click(function() {
-    window.location = '/docs/1.0/search-results.html?' + $('#search-input')[0].value
+    window.location = '/docs/1.0/search-results.html?' + $('#search-field')[0].value
   })
 </script>
 

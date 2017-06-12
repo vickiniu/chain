@@ -26,7 +26,6 @@ $(document).ready(function(){
   result.slice(0,10).forEach(function(res) {
     var obj = res["item"]
     var url = obj["Url"].slice(0,-3)
-    console.log(url)
     var title = url.split('/').slice(-1)[0].replace(/-/g, ' ')
     $('#search-results').append('<div id="search-result"><a href="' + url +'" target="blank">'+ title +'</a></div>')
   })
