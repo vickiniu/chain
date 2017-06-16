@@ -90,7 +90,7 @@ func main() {
 	}
 
 	// run postgres
-	pgCmd := exec.Command(pg+"Postgres.exe", "-D", pgDataDir)
+	pgCmd := exec.Command(pg+"pg_ctl.exe", "-D", pgDataDir, "start")
 	pgCmd.Stdout = f
 	pgCmd.Stderr = f
 
